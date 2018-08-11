@@ -4,6 +4,7 @@ import time
 import sys
 from telepot.namedtuple import ReplyKeyboardMarkup, KeyboardButton
 import sqlite3
+import threading
 
 token = "" # token bot
 bot = telepot.Bot(token)
@@ -16,77 +17,87 @@ try:
 	c.execute('SELECT * FROM users')
 except sqlite3.OperationalError:
 	c.execute('CREATE table users ( userid VARCHAR(8) NOT NULL, status VARCHAR(8) NOT NULL DEFAULT "clean", userToChat VARCHAR(8), chatStatus VARCHAR(20) NOT NULL DEFAULT "not active");')
-conn.commit()
-# close connection
-conn.close()
+	conn.commit() # close connection
+conn.close() # close connection
 
 def query(query):
 	conn = sqlite3.connect('setting.db')
 	c = conn.cursor()
-	c.execute(query)
+	res = c.execute(query)
 	conn.commit()
 	conn.close()
+
+def searching(msg, message):
+	content_type, chat_type, chat_id = telepot.glance(msg)
+	i = 0
+	while True:
+		try:
+			dot = ['', '.', '..', '...']
+			conn = sqlite3.connect('setting.db')
+			c = conn.cursor()
+			check = c.execute("SELECT chatStatus FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
+			userToChat = c.execute("SELECT userToChat FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
+			conn.close()
+			if check == 'occuped':
+				stage[chat_id] = userToChat
+				bot.editMessageText(telepot.message_identifier(message), "status: connected")
+				break
+			else:
+				if i == 3:
+					i = 0
+				else:
+					i += 1
+				bot.editMessageText(telepot.message_identifier(message), "status: search" + dot[i])
+				time.sleep(0.7)
+		except:
+			pass
 
 def start(msg):
 	content_type, chat_type, chat_id = telepot.glance(msg)
 	try:
-		reply = msg['reply_to_message']['message_id'] - 1
+		reply = msg['reply_to_message']['message_id']
 	except:
 		reply = None
 	try:
 		stage[chat_id]
 	except:
-		stage[chat_id] = 0
-	try:
 		conn = sqlite3.connect('setting.db')
 		c = conn.cursor()
-		check = c.execute("SELECT chatStatus FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
-		userToChat = c.execute("SELECT userToChat FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
-		conn.close()
-		if check == 'occuped' and stage[chat_id] != userToChat:
-			stage[chat_id] = userToChat
-		elif check != 'occuped':
+		if c.execute("SELECT chatStatus FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0] == 'occuped':
+			stage[chat_id] = c.execute("SELECT userToChat FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
+		else:
 			stage[chat_id] = 0
-	except:
-		pass
+		conn.commit()
+		conn.close()
+		
 	if content_type == 'text' and msg['text'] == '/start':
 		stage[chat_id] = 'start'
 		conn = sqlite3.connect('setting.db')
 		c = conn.cursor()
-		try:
-			c.execute("SELECT * FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
-		except:
-			c.execute("INSERT INTO users VALUES ('" + str(chat_id) +  "','clean', 'NULL', 'not active' )")
+		c.execute("UPDATE users SET chatStatus = 'active' WHERE userid = '" + str(chat_id) + "'")
 		conn.commit()
-		check = c.execute("SELECT status FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
 		conn.close()
-
-		if check == 'blocked':
-			bot.sendMessage(chat_id, "you are blocked")
-		elif check == 'reported' or check == 'clean':
-			if check == 'reported':
-				bot.sendMessage(chat_id, "you are reported, watch out!")
-			query("UPDATE users SET chatStatus = 'active' WHERE userid = '" + str(chat_id) + "'") # set status active for chatting with other user
-			message = bot.sendMessage(chat_id, "connection: serching...")
-			message
+		try:
+			conn = sqlite3.connect('setting.db')
+			c = conn.cursor()
+			userToChat = c.execute("SELECT userid FROM users WHERE chatStatus = 'active' AND NOT userid = '" + str(chat_id) + "'").fetchone()[0]
+			conn.close()
+			query("UPDATE users SET chatStatus = 'occuped', userToChat = '" + str(userToChat) + "'  WHERE userid = '" + str(chat_id) + "'")
+			query("UPDATE users SET chatStatus = 'occuped', userToChat = '" + str(chat_id) + "'  WHERE userid = '" + str(userToChat) + "'")
+			stage[chat_id] = userToChat
+			bot.sendMessage(chat_id, 'status: connected')
+		except:
+			message = bot.sendMessage(chat_id, 'status: serching...')
+			t = threading.Thread(target=searching, args=(msg, message,))
+			t.start()
 			# search an other user
-			try:
-				conn = sqlite3.connect('setting.db')
-				c = conn.cursor()
-				userToChat = c.execute("SELECT userid FROM users WHERE chatStatus = 'active' AND NOT userid = '" + str(chat_id) + "'").fetchone()[0]
-				conn.close()
-				query("UPDATE users SET chatStatus = 'occuped', userToChat = '" + str(userToChat) + "'  WHERE userid = '" + str(chat_id) + "'")
-				query("UPDATE users SET chatStatus = 'occuped', userToChat = '" + str(chat_id) + "'  WHERE userid = '" + str(userToChat) + "'")
-				stage[chat_id] = userToChat
-			except:
-				pass
 	elif content_type == 'text' and stage[chat_id] != 0:
 		if content_type == 'text' and msg['text'] == '/end':
 			# end conversation
 			query("UPDATE users SET chatStatus = 'not active', userToChat = 'NULL'  WHERE userid = '" + str(chat_id) + "'")
 			query("UPDATE users SET chatStatus = 'not active', userToChat = 'NULL'  WHERE userid = '" + str(stage[chat_id]) + "'")
 			bot.sendMessage(stage[chat_id], "your stranger ending conversetion, type /start to starting a new conversation")
-			bot.sendMessage(chat_id, "Ending conversetion, type /start to starting a new conversation")
+			bot.sendMessage(chat_id, "ending conversetion, type /start to starting a new conversation")
 		else:
 			bot.sendMessage(stage[chat_id], msg['text'], reply_to_message_id=reply) # send text
 	elif content_type == 'photo' and stage[chat_id] != 0:
