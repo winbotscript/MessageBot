@@ -5,8 +5,9 @@ import sys
 from telepot.namedtuple import ReplyKeyboardMarkup, KeyboardButton
 import sqlite3
 import threading
+import sys
 
-token = "" # token bot
+token = sys.argv[1] # token bot
 bot = telepot.Bot(token)
 stage  = {}
 
@@ -17,7 +18,7 @@ try:
 	c.execute('SELECT * FROM users')
 except sqlite3.OperationalError:
 	c.execute('CREATE table users ( userid VARCHAR(8) NOT NULL, status VARCHAR(8) NOT NULL DEFAULT "clean", userToChat VARCHAR(8), chatStatus VARCHAR(20) NOT NULL DEFAULT "not active");')
-	conn.commit() # close connection
+	conn.commit() # save modify
 conn.close() # close connection
 
 def query(query):
@@ -63,13 +64,20 @@ def start(msg):
 	except:
 		conn = sqlite3.connect('setting.db')
 		c = conn.cursor()
-		if c.execute("SELECT chatStatus FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0] == 'occuped':
+		try:
 			stage[chat_id] = c.execute("SELECT userToChat FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
-		else:
+		except:
 			stage[chat_id] = 0
-		conn.commit()
+		finally:
+			conn.close()
+	try:
+		conn = sqlite3.connect('setting.db')
+		c = conn.cursor()
+		c.execute("SELECT * FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
 		conn.close()
-		
+	except:
+		query("INSERT INTO users (userid) VALUES ('" + str(chat_id) + "')")
+	
 	if content_type == 'text' and msg['text'] == '/start':
 		stage[chat_id] = 'start'
 		conn = sqlite3.connect('setting.db')
