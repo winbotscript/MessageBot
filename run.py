@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import sys
 
-token = sys.argv[1] # token bot
+token = sys.argv[1] # python3 run.py "token_bot"
 bot = telepot.Bot(token)
 stage  = {}
 
@@ -17,14 +17,13 @@ c = conn.cursor()
 try:
 	c.execute('SELECT * FROM users')
 except sqlite3.OperationalError:
-	c.execute('CREATE table users ( userid VARCHAR(8) NOT NULL, status VARCHAR(8) NOT NULL DEFAULT "clean", userToChat VARCHAR(8), chatStatus VARCHAR(20) NOT NULL DEFAULT "not active");')
+	c.execute('CREATE table users ( userid VARCHAR(8) NOT NULL, status VARCHAR(8) NOT NULL DEFAULT "clean", userToChat VARCHAR(8), chatStatus VARCHAR(20) NOT NULL DEFAULT "not active", photo BOOLEAN NOT NULL DEFAULT "TRUE" );')
 	conn.commit() # save modify
 conn.close() # close connection
 
 def query(query):
 	conn = sqlite3.connect('setting.db')
-	c = conn.cursor()
-	res = c.execute(query)
+	conn.cursor().execute(query)
 	conn.commit()
 	conn.close()
 
@@ -86,6 +85,7 @@ def start(msg):
 		conn.commit()
 		conn.close()
 		try:
+			# if an other user is "active" connect
 			conn = sqlite3.connect('setting.db')
 			c = conn.cursor()
 			userToChat = c.execute("SELECT userid FROM users WHERE chatStatus = 'active' AND NOT userid = '" + str(chat_id) + "'").fetchone()[0]
@@ -95,10 +95,12 @@ def start(msg):
 			stage[chat_id] = userToChat
 			bot.sendMessage(chat_id, 'status: connected')
 		except:
+			# search an other user
 			message = bot.sendMessage(chat_id, 'status: serching...')
 			t = threading.Thread(target=searching, args=(msg, message,))
 			t.start()
-			# search an other user
+	elif content_type == 'text' and msg['text'] == '/nopics':
+		query("UPDATE users SET photo = 'FALSE' WHERE userid = '" + str(chat_id) + "'")
 	elif content_type == 'text' and stage[chat_id] != 0:
 		if content_type == 'text' and msg['text'] == '/end':
 			# end conversation
@@ -109,7 +111,15 @@ def start(msg):
 		else:
 			bot.sendMessage(stage[chat_id], msg['text'], reply_to_message_id=reply) # send text
 	elif content_type == 'photo' and stage[chat_id] != 0:
-		bot.sendPhoto(stage[chat_id], msg['photo'][0]['file_id'], reply_to_message_id=reply) # send photos
+		# no pics
+		conn = sqlite3.connect('setting.db')
+		c = conn.cursor()
+		photo = c.execute("SELECT photo FROM users WHERE userid = '" + str(stage[chat_id]) + "'").fetchone()[0]
+		conn.close()
+		if photo == 'TRUE':
+			bot.sendPhoto(stage[chat_id], msg['photo'][0]['file_id'], reply_to_message_id=reply) # send photos
+		else: 
+			bot.sendMessage(chat_id, 'User block the pics')
 	elif content_type == 'voice' and stage[chat_id] != 0:
 		bot.sendVoice(stage[chat_id], msg['voice']['file_id'], reply_to_message_id=reply) # send voice
 	elif content_type == 'sticker' and stage[chat_id] != 0:
