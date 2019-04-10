@@ -2,140 +2,105 @@
 import telepot
 import time
 import sys
-from telepot.namedtuple import ReplyKeyboardMarkup, KeyboardButton
-import sqlite3
 import threading
-import sys
+import messages
+from sql import DatabaseQuery
+from telepot.namedtuple import ReplyKeyboardMarkup, KeyboardButton
 
 token = sys.argv[1] # python3 run.py "token_bot"
 bot = telepot.Bot(token)
 stage  = {}
 
-conn = sqlite3.connect('setting.db') # select database file to connect
-c = conn.cursor() 
-# check if 'users' table exist
-try:
-	c.execute('SELECT * FROM users')
-except sqlite3.OperationalError:
-	c.execute('CREATE table users ( userid VARCHAR(8) NOT NULL, status VARCHAR(8) NOT NULL DEFAULT "clean", userToChat VARCHAR(8), chatStatus VARCHAR(20) NOT NULL DEFAULT "not active", photo BOOLEAN NOT NULL DEFAULT "TRUE" );')
-	conn.commit() # save modify
-conn.close() # close connection
+F = "setting.db"
 
-def query(query):
-	conn = sqlite3.connect('setting.db')
-	conn.cursor().execute(query)
-	conn.commit()
-	conn.close()
+s = DatabaseQuery(F)
+
+s.create_table()
 
 def searching(msg, message):
 	content_type, chat_type, chat_id = telepot.glance(msg)
 	i = 0
+	dot = ['.', '..', '...', '']
 	while True:
-		try:
-			dot = ['', '.', '..', '...']
-			conn = sqlite3.connect('setting.db')
-			c = conn.cursor()
-			check = c.execute("SELECT chatStatus FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
-			userToChat = c.execute("SELECT userToChat FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
-			conn.close()
-			if check == 'occuped':
-				stage[chat_id] = userToChat
-				bot.editMessageText(telepot.message_identifier(message), "status: connected")
-				break
-			else:
-				if i == 3:
-					i = 0
-				else:
-					i += 1
-				bot.editMessageText(telepot.message_identifier(message), "status: search" + dot[i])
-				time.sleep(0.7)
-		except:
-			pass
+		status = s.get_chat_status(chat_id)
+		if status == 'occuped':
+			stage[chat_id] = s.get_user_to_chat(chat_id)
+			bot.editMessageText(telepot.message_identifier(message), messages.STATUS_CONNECT)
+			break
+		else:
+			if i is 3: i = 0
+			else: i += 1
+			bot.editMessageText(telepot.message_identifier(message), "{}{}".format(messages.STATUS_SEARCH, dot[i]))
+			time.sleep(0.7)
 
 def start(msg):
 	content_type, chat_type, chat_id = telepot.glance(msg)
-	try:
-		reply = msg['reply_to_message']['message_id']
-	except:
-		reply = None
-	try:
-		stage[chat_id]
-	except:
-		conn = sqlite3.connect('setting.db')
-		c = conn.cursor()
-		try:
-			stage[chat_id] = c.execute("SELECT userToChat FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
-		except:
-			stage[chat_id] = 0
-		finally:
-			conn.close()
-	try:
-		conn = sqlite3.connect('setting.db')
-		c = conn.cursor()
-		c.execute("SELECT * FROM users WHERE userid = '" + str(chat_id) + "'").fetchone()[0]
-		conn.close()
-	except:
-		query("INSERT INTO users (userid) VALUES ('" + str(chat_id) + "')")
-	
+
+	# TODO: fix reply
+	# try: reply = msg['reply_to_message']['message_id']
+	# except: reply = None
+	reply = None
+
+	if chat_id not in stage: stage[chat_id] = s.get_user_to_chat(chat_id)
+
+	s.register_user(chat_id)
+
 	if content_type == 'text' and msg['text'] == '/start':
-		stage[chat_id] = 'start'
-		conn = sqlite3.connect('setting.db')
-		c = conn.cursor()
-		c.execute("UPDATE users SET chatStatus = 'active' WHERE userid = '" + str(chat_id) + "'")
-		conn.commit()
-		conn.close()
-		try:
-			# if an other user is "active" connect
-			conn = sqlite3.connect('setting.db')
-			c = conn.cursor()
-			userToChat = c.execute("SELECT userid FROM users WHERE chatStatus = 'active' AND NOT userid = '" + str(chat_id) + "'").fetchone()[0]
-			conn.close()
-			query("UPDATE users SET chatStatus = 'occuped', userToChat = '" + str(userToChat) + "'  WHERE userid = '" + str(chat_id) + "'")
-			query("UPDATE users SET chatStatus = 'occuped', userToChat = '" + str(chat_id) + "'  WHERE userid = '" + str(userToChat) + "'")
-			stage[chat_id] = userToChat
-			bot.sendMessage(chat_id, 'status: connected')
-		except:
-			# search an other user
-			message = bot.sendMessage(chat_id, 'status: serching...')
+		stage[chat_id] == 'start'
+		s.active_user(chat_id) # set active user to chat
+		check_connect = s.check_connect(chat_id) # check if user can connect
+		if check_connect:
+			stage[chat_id] = s.get_user_to_chat(chat_id)
+			bot.sendMessage(chat_id, messages.STATUS_CONNECT)
+		else:
+			# wait an other user
+			message = bot.sendMessage(chat_id, messages.STATUS_SEARCH)
 			t = threading.Thread(target=searching, args=(msg, message,))
 			t.start()
+
 	elif content_type == 'text' and msg['text'] == '/nopics':
-		query("UPDATE users SET photo = 'FALSE' WHERE userid = '" + str(chat_id) + "'")
+		s.set_pics(chat_id, "FALSE")
+
+	elif content_type == 'text' and msg['text'] == '/pics':
+		s.set_pics(chat_id, "TRUE")
+
 	elif content_type == 'text' and stage[chat_id] != 0:
 		if content_type == 'text' and msg['text'] == '/end':
-			# end conversation
-			query("UPDATE users SET chatStatus = 'not active', userToChat = 'NULL'  WHERE userid = '" + str(chat_id) + "'")
-			query("UPDATE users SET chatStatus = 'not active', userToChat = 'NULL'  WHERE userid = '" + str(stage[chat_id]) + "'")
-			bot.sendMessage(stage[chat_id], "your stranger ending conversetion, type /start to starting a new conversation")
-			bot.sendMessage(chat_id, "ending conversetion, type /start to starting a new conversation")
+			s.end_conversation(chat_id) # end conversation
+			bot.sendMessage(stage[chat_id], messages.END_STRANGE)
+			bot.sendMessage(chat_id, messages.END)
 		else:
 			bot.sendMessage(stage[chat_id], msg['text'], reply_to_message_id=reply) # send text
+
 	elif content_type == 'photo' and stage[chat_id] != 0:
-		# no pics
-		conn = sqlite3.connect('setting.db')
-		c = conn.cursor()
-		photo = c.execute("SELECT photo FROM users WHERE userid = '" + str(stage[chat_id]) + "'").fetchone()[0]
-		conn.close()
-		if photo == 'TRUE':
-			bot.sendPhoto(stage[chat_id], msg['photo'][0]['file_id'], reply_to_message_id=reply) # send photos
-		else: 
-			bot.sendMessage(chat_id, 'User block the pics')
+		check = s.check_pics(stage[chat_id])
+		if check == 'TRUE': bot.sendPhoto(stage[chat_id], msg['photo'][0]['file_id'], reply_to_message_id=reply) # send photos
+		else: bot.sendMessage(chat_id, messages.BLOCK_PICS)
+
 	elif content_type == 'voice' and stage[chat_id] != 0:
 		bot.sendVoice(stage[chat_id], msg['voice']['file_id'], reply_to_message_id=reply) # send voice
+
 	elif content_type == 'sticker' and stage[chat_id] != 0:
 		bot.sendSticker(stage[chat_id], msg['sticker']['file_id'], reply_to_message_id=reply) # send sticker
+
 	elif content_type == 'location' and stage[chat_id] != 0:
 		bot.sendLocation(stage[chat_id], msg['location']['latitude'], msg['location']['longitude'], reply_to_message_id=reply) # send location
+
 	elif content_type == 'document' and stage[chat_id] != 0:
 		bot.sendDocument(stage[chat_id], msg['document']['file_id'], reply_to_message_id=reply) # send document
+
 	elif content_type == 'contact' and stage[chat_id] != 0:
 		bot.sendContact(stage[chat_id], msg['contact']['phone_number'], msg['contact']['first_name'], reply_to_message_id=reply) # send contact
+
 	elif content_type == 'audio' and stage[chat_id] != 0:
 		bot.sendAudio(stage[chat_id], msg['audio']['file_id'], reply_to_message_id=reply) # send audio
+
 	elif content_type == 'video' and stage[chat_id] != 0:
 		bot.sendVideo(stage[chat_id], msg['video']['file_id'], reply_to_message_id=reply) # send video
+
 	elif content_type == 'video_note' and stage[chat_id] != 0:
 		bot.sendVideoNote(stage[chat_id], msg['video_note']['file_id'], reply_to_message_id=reply) # send video_note
+
 bot.message_loop(start)
 print("Bot started")
 try:
